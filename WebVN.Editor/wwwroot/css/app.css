@@ -410,24 +410,24 @@ button {
 
 .scene-character-figure {
     position: relative;
-    display: inline-flex;
-    align-items: end;
-    justify-content: center;
+    display: inline-block;
+    line-height: 0;
 }
 
 .scene-character-image {
     display: block;
-    height: clamp(12rem, 52vh, 26rem);
     width: auto;
+    height: auto;
+    max-height: clamp(12rem, 52vh, 26rem);
     max-width: min(26rem, 40vw);
-    object-fit: contain;
     image-rendering: auto;
 }
 
-.scene-character-active .scene-character-image,
-.scene-character-active .scene-character-card {
-    outline: 3px solid rgba(243, 216, 190, 0.95);
-    outline-offset: 4px;
+.scene-character-bounds {
+    position: absolute;
+    inset: 0;
+    border: 3px solid rgba(243, 216, 190, 0.95);
+    box-sizing: border-box;
 }
 
 .character-handle {
@@ -441,15 +441,23 @@ button {
     font-size: 0.78rem;
 }
 
-.character-handle-bar {
+.character-handle-anchor {
     position: absolute;
     left: 50%;
-    bottom: calc(100% - 1.25rem);
-    transform: translateX(-50%) scale(calc(var(--character-flip) * var(--handle-scale)), var(--handle-scale));
+    bottom: calc(100% + 0.35rem);
+    transform: translate(calc(-50% + var(--handle-offset-x, 0px)), var(--handle-offset-y, 0px));
+    transform-origin: center bottom;
+    z-index: 18;
+    pointer-events: none;
+}
+
+.character-handle-bar {
+    transform: scale(calc(var(--character-flip) * var(--handle-scale)), var(--handle-scale));
     transform-origin: center bottom;
     z-index: 18;
     display: inline-flex;
     gap: 0.5rem;
+    pointer-events: auto;
 }
 
 .character-color-picker {
@@ -544,6 +552,7 @@ button {
     right: 1rem;
     bottom: 1rem;
     z-index: 30;
+    pointer-events: none;
     min-height: 9.25rem;
     display: flex;
     flex-direction: column;

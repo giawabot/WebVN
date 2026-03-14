@@ -101,6 +101,50 @@ const webVNDrag = (() => {
     state.characterElement.style.setProperty("--handle-scale", `${1 / Math.max(0.1, state.currentScale)}`);
   }
 
+  function clampHandlesIntoStage(state) {
+    const handleAnchor = state.characterElement.querySelector(".character-handle-anchor");
+    if (!handleAnchor) {
+      return;
+    }
+
+    state.characterElement.style.setProperty("--handle-offset-x", "0px");
+    state.characterElement.style.setProperty("--handle-offset-y", "0px");
+
+    const margin = 8;
+    const handleRect = handleAnchor.getBoundingClientRect();
+    const stageRect = state.stageRect;
+
+    let offsetX = 0;
+    let offsetY = 0;
+
+    if (handleRect.left < stageRect.left + margin) {
+      offsetX = (stageRect.left + margin) - handleRect.left;
+    } else if (handleRect.right > stageRect.right - margin) {
+      offsetX = (stageRect.right - margin) - handleRect.right;
+    }
+
+    if (handleRect.top < stageRect.top + margin) {
+      offsetY = (stageRect.top + margin) - handleRect.top;
+    } else if (handleRect.bottom > stageRect.bottom - margin) {
+      offsetY = (stageRect.bottom - margin) - handleRect.bottom;
+    }
+
+    state.characterElement.style.setProperty("--handle-offset-x", `${offsetX}px`);
+    state.characterElement.style.setProperty("--handle-offset-y", `${offsetY}px`);
+  }
+
+  function clampCharacterHandles(stageElement, characterElementId) {
+    const characterElement = document.getElementById(characterElementId);
+    if (!stageElement || !characterElement) {
+      return;
+    }
+
+    clampHandlesIntoStage({
+      stageRect: stageElement.getBoundingClientRect(),
+      characterElement
+    });
+  }
+
   function computeState(state, clientX, clientY) {
     const deltaX = clientX - state.startClientX;
     const deltaY = clientY - state.startClientY;
@@ -157,6 +201,7 @@ const webVNDrag = (() => {
 
     computeState(state, clientX, clientY);
     applyCharacterPreview(state);
+    clampHandlesIntoStage(state);
 
     await state.dotNetRef.invokeMethodAsync("CompleteStageDrag", state.characterId, state.currentX, state.currentY, state.currentScale);
   }
@@ -201,6 +246,8 @@ const webVNDrag = (() => {
     };
 
     characterElement.style.setProperty("--character-flip", flipX ? "-1" : "1");
+    characterElement.style.setProperty("--handle-offset-x", "0px");
+    characterElement.style.setProperty("--handle-offset-y", "0px");
     applyCharacterPreview(activeDrag);
 
     window.addEventListener("pointermove", activeDrag.onPointerMove, true);
@@ -209,7 +256,8 @@ const webVNDrag = (() => {
   }
 
   return {
-    startCharacterDrag
+    startCharacterDrag,
+    clampCharacterHandles
   };
 })();
 
@@ -233,5 +281,6 @@ window.webVN = {
     link.click();
     URL.revokeObjectURL(url);
   },
-  startCharacterDrag: webVNDrag.startCharacterDrag
+  startCharacterDrag: webVNDrag.startCharacterDrag,
+  clampCharacterHandles: webVNDrag.clampCharacterHandles
 };

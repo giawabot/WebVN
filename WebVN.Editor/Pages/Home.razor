@@ -122,20 +122,24 @@
                                         <span>@character.CharacterId</span>
                                     </div>
                                 }
+                                @if (IsActiveCharacter(character.CharacterId))
+                                {
+                                    <div class="scene-character-bounds">
+                                        <div class="character-handle-anchor">
+                                            <div class="character-handle-bar">
+                                                <button type="button" class="character-handle character-handle-move" title="Drag to move" @onpointerdown="@((args) => BeginStageDragAsync(character.CharacterId, StageDragMode.Translate, args))" @onpointerdown:preventDefault="true" @onpointerdown:stopPropagation="true">Move</button>
+                                                <button type="button" class="character-handle character-handle-scale" title="Drag to scale" @onpointerdown="@((args) => BeginStageDragAsync(character.CharacterId, StageDragMode.Scale, args))" @onpointerdown:preventDefault="true" @onpointerdown:stopPropagation="true">Scale</button>
+                                                <button type="button" class="character-handle" title="Flip horizontally" @onclick="ToggleSelectedCharacterFlip" @onclick:stopPropagation="true">Flip</button>
+                                                <label class="character-color-picker" title="Tint color" @onclick:stopPropagation="true">
+                                                    <span class="sr-only">Tint color</span>
+                                                    <input type="color" value="@SelectedCharacterTintHex" @onchange="UpdateSelectedCharacterTint" />
+                                                </label>
+                                                <button type="button" class="character-handle character-handle-remove" title="Remove character from this line" @onclick="RemoveSelectedCharacterFromPreview" @onclick:stopPropagation="true">x</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                }
                             </div>
-                            @if (IsActiveCharacter(character.CharacterId))
-                            {
-                                <div class="character-handle-bar">
-                                    <button type="button" class="character-handle character-handle-move" title="Drag to move" @onpointerdown="@((args) => BeginStageDragAsync(character.CharacterId, StageDragMode.Translate, args))" @onpointerdown:preventDefault="true" @onpointerdown:stopPropagation="true">Move</button>
-                                    <button type="button" class="character-handle character-handle-scale" title="Drag to scale" @onpointerdown="@((args) => BeginStageDragAsync(character.CharacterId, StageDragMode.Scale, args))" @onpointerdown:preventDefault="true" @onpointerdown:stopPropagation="true">Scale</button>
-                                    <button type="button" class="character-handle" title="Flip horizontally" @onclick="ToggleSelectedCharacterFlip" @onclick:stopPropagation="true">Flip</button>
-                                    <label class="character-color-picker" title="Tint color" @onclick:stopPropagation="true">
-                                        <span class="sr-only">Tint color</span>
-                                        <input type="color" value="@SelectedCharacterTintHex" @onchange="UpdateSelectedCharacterTint" />
-                                    </label>
-                                    <button type="button" class="character-handle character-handle-remove" title="Remove character from this line" @onclick="RemoveSelectedCharacterFromPreview" @onclick:stopPropagation="true">x</button>
-                                </div>
-                            }
                         </div>
                     }
                     @if (EditorState.CurrentChoiceSet is not null)
@@ -311,6 +315,8 @@
     private string ProjectNameInput { get; set; } = "Untitled Project";
     private bool HasPendingDragSave { get; set; }
     private bool IsStageDragInProgress { get; set; }
+    private string? PendingHandleClampCharacterId { get; set; }
+    private string? LastClampedHandleCharacterId { get; set; }
     private DotNetObjectReference<Home>? DotNetRef { get; set; }
     private string MusicCueInput { get; set; } = string.Empty;
     private string OneShotSfxInput { get; set; } = string.Empty;
@@ -327,6 +333,31 @@
         StatusMessage = EditorState.Project.LastModifiedUtc == default
             ? "Import a CSV or open a package"
             : $"Loaded local project from {EditorState.Project.LastModifiedUtc.LocalDateTime:t}";
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        var characterId = PendingHandleClampCharacterId;
+        if (string.IsNullOrWhiteSpace(characterId)
+            && !string.IsNullOrWhiteSpace(SelectedCharacterId)
+            && IsActiveCharacter(SelectedCharacterId)
+            && !string.Equals(LastClampedHandleCharacterId, SelectedCharacterId, StringComparison.Ordinal))
+        {
+            characterId = SelectedCharacterId;
+        }
+
+        if (string.IsNullOrWhiteSpace(characterId))
+        {
+            return;
+        }
+
+        PendingHandleClampCharacterId = null;
+        LastClampedHandleCharacterId = characterId;
+
+        await JSRuntime.InvokeVoidAsync(
+            "webVN.clampCharacterHandles",
+            SceneStageRef,
+            BuildCharacterElementId(characterId));
     }
 
     private void CommitProjectName()
@@ -527,7 +558,12 @@
         using var memoryStream = new MemoryStream();
         await stream.CopyToAsync(memoryStream);
 
-        var asset = EditorState.AddCharacterAsset(file.Name, file.Name, file.ContentType, memoryStream.ToArray());
+        var bytes = memoryStream.ToArray();
+        var asset = EditorState.AddCharacterAsset(
+            file.Name,
+            file.Name,
+            file.ContentType,
+            bytes);
         SelectedCharacterId = asset.Id;
         CharacterX = 0;
         CharacterY = 0.08;
@@ -542,6 +578,8 @@
     private void SelectCharacterAsset(string assetId)
     {
         SelectedCharacterId = assetId;
+        PendingHandleClampCharacterId = assetId;
+        LastClampedHandleCharacterId = null;
         var activeCharacter = EditorState.CurrentScene.Characters.FirstOrDefault(item => item.CharacterId == assetId);
         if (activeCharacter is not null)
         {
@@ -676,6 +714,7 @@
         if (selectedCharacter is null)
         {
             SelectedCharacterId = string.Empty;
+            LastClampedHandleCharacterId = null;
             CharacterX = 0;
             CharacterY = 0.08;
             CharacterScale = 1;
@@ -687,6 +726,7 @@
         else
         {
             SelectedCharacterId = selectedCharacter.CharacterId;
+            LastClampedHandleCharacterId = null;
             CharacterX = selectedCharacter.X;
             CharacterY = selectedCharacter.Y;
             CharacterScale = selectedCharacter.Scale;
@@ -903,6 +943,7 @@
     public Task CompleteStageDrag(string characterId, double x, double y, double scale)
     {
         IsStageDragInProgress = false;
+        PendingHandleClampCharacterId = characterId;
 
         if (!string.Equals(SelectedCharacterId, characterId, StringComparison.Ordinal))
         {
