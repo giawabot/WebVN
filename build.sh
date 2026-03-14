@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+
+curl -sSL https://dot.net/v1/dotnet-install.sh -o dotnet-install.sh
+chmod +x dotnet-install.sh
+./dotnet-install.sh -c 10.0 -InstallDir ./dotnet
+
+./dotnet/dotnet --version
+./dotnet/dotnet publish WebVN.Editor/WebVN.Editor.csproj -c Release -o output
