@@ -1,0 +1,981 @@
+@page "/"
+@using System
+@using Microsoft.AspNetCore.Components
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.AspNetCore.Components.Web
+@using Microsoft.JSInterop
+@using WebVN.Editor.Models
+@implements IDisposable
+@inject WebVN.Editor.Services.EditorState EditorState
+@inject WebVN.Editor.Services.IProjectPackageService ProjectPackageService
+@inject IJSRuntime JSRuntime
+
+<PageTitle>WebVN Editor</PageTitle>
+
+<div class="workspace-shell">
+    @if (IsBusy)
+    {
+        <div class="loading-overlay" aria-live="polite" aria-busy="true">
+            <div class="loading-card">
+                <div class="loading-spinner"></div>
+                <strong>@BusyTitle</strong>
+                <span>@BusyMessage</span>
+            </div>
+        </div>
+    }
+
+    <section class="hero-panel hero-panel-compact">
+        <div>
+            <p class="eyebrow">WebVN Editor</p>
+            <label class="project-name-field">
+                <span class="sr-only">Project name</span>
+                <input @bind="ProjectNameInput" @bind:event="oninput" @onblur="CommitProjectName" @onkeydown="HandleProjectNameKeyDown" placeholder="Untitled Project" />
+            </label>
+        </div>
+    </section>
+
+    <section class="toolbar">
+        <label class="tool-button tool-button-file">
+            <span>New From CSV</span>
+            <InputFile OnChange="ImportNewCsvAsync" accept=".csv" />
+        </label>
+        <label class="tool-button tool-button-file">
+            <span>Update CSV</span>
+            <InputFile OnChange="ImportUpdatedCsvAsync" accept=".csv" />
+        </label>
+        <label class="tool-button tool-button-file">
+            <span>Open Package</span>
+            <InputFile OnChange="ImportProjectPackageAsync" accept=".zip" />
+        </label>
+        <button class="tool-button" @onclick="ExportProjectPackageAsync">Export Package</button>
+        <div class="status-pill">@StatusMessage</div>
+    </section>
+
+    <section class="editor-grid">
+        <div class="preview-column">
+            <div class="panel surface scene-panel">
+                <div class="panel-header">
+                    <div>
+                        <p class="panel-label">Scene preview</p>
+                        <h2>@BuildSelectedRowTitle()</h2>
+                    </div>
+                    <div class="panel-action">
+                        <span>@(EditorState.SelectedRow?.ActionLabel ?? "None")</span>
+                    </div>
+                </div>
+
+                @{ var currentScene = EditorState.CurrentScene; }
+                <div class="scene-stage" @ref="SceneStageRef" style="@BuildBackgroundStyle()">
+                    <svg class="scene-filters" aria-hidden="true" focusable="false">
+                        <defs>
+                            @foreach (var character in currentScene.Characters.OrderBy(item => item.Layer))
+                            {
+                                <filter id="@BuildTintFilterId(character)">
+                                    <feComponentTransfer>
+                                        <feFuncR type="linear" slope="@BuildTintSlope(character.TintR)" />
+                                        <feFuncG type="linear" slope="@BuildTintSlope(character.TintG)" />
+                                        <feFuncB type="linear" slope="@BuildTintSlope(character.TintB)" />
+                                        <feFuncA type="identity" />
+                                    </feComponentTransfer>
+                                </filter>
+                            }
+                        </defs>
+                    </svg>
+                    @if (string.IsNullOrWhiteSpace(ResolveBackgroundImageUrl()))
+                    {
+                        <div class="scene-background">@ResolveBackgroundName()</div>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(currentScene.MusicCueName) || currentScene.OneShotSfxCueNames.Any())
+                    {
+                        <div class="scene-audio-readout">
+                            @if (!string.IsNullOrWhiteSpace(currentScene.MusicCueName))
+                            {
+                                <div class="audio-chip">
+                                    <button type="button" class="audio-chip-remove" title="Stop music on this line" @onclick="RemoveMusic" @onclick:stopPropagation="true">x</button>
+                                    <strong>Music</strong>
+                                    <span>@currentScene.MusicCueName</span>
+                                </div>
+                            }
+                            @foreach (var cue in currentScene.OneShotSfxCueNames)
+                            {
+                                <div class="audio-chip audio-chip-sfx">
+                                    <button type="button" class="audio-chip-remove" title="Remove this SFX from the current line" @onclick="@(() => RemoveOneShotSfx(cue))" @onclick:stopPropagation="true">x</button>
+                                    <strong>SFX</strong>
+                                    <span>@cue</span>
+                                </div>
+                            }
+                        </div>
+                    }
+                    @foreach (var character in currentScene.Characters.OrderBy(item => item.Layer))
+                    {
+                        <div id="@BuildCharacterElementId(character.CharacterId)" data-character-id="@character.CharacterId" class="scene-character @(IsActiveCharacter(character.CharacterId) ? "scene-character-active" : string.Empty)" style="@BuildCharacterStyle(character)" @onclick="@(() => SelectCharacterAsset(character.CharacterId))">
+                            <div class="scene-character-figure">
+                                @if (!string.IsNullOrWhiteSpace(ResolveCharacterImageUrl(character.CharacterId)))
+                                {
+                                    <img class="scene-character-image" src="@ResolveCharacterImageUrl(character.CharacterId)" alt="@character.DisplayName" style="@BuildCharacterImageStyle(character)" />
+                                }
+                                else
+                                {
+                                    <div class="scene-character-card">
+                                        <strong>@character.DisplayName</strong>
+                                        <span>@character.CharacterId</span>
+                                    </div>
+                                }
+                            </div>
+                            @if (IsActiveCharacter(character.CharacterId))
+                            {
+                                <div class="character-handle-bar">
+                                    <button type="button" class="character-handle character-handle-move" title="Drag to move" @onpointerdown="@((args) => BeginStageDragAsync(character.CharacterId, StageDragMode.Translate, args))" @onpointerdown:preventDefault="true" @onpointerdown:stopPropagation="true">Move</button>
+                                    <button type="button" class="character-handle character-handle-scale" title="Drag to scale" @onpointerdown="@((args) => BeginStageDragAsync(character.CharacterId, StageDragMode.Scale, args))" @onpointerdown:preventDefault="true" @onpointerdown:stopPropagation="true">Scale</button>
+                                    <button type="button" class="character-handle" title="Flip horizontally" @onclick="ToggleSelectedCharacterFlip" @onclick:stopPropagation="true">Flip</button>
+                                    <label class="character-color-picker" title="Tint color" @onclick:stopPropagation="true">
+                                        <span class="sr-only">Tint color</span>
+                                        <input type="color" value="@SelectedCharacterTintHex" @onchange="UpdateSelectedCharacterTint" />
+                                    </label>
+                                    <button type="button" class="character-handle character-handle-remove" title="Remove character from this line" @onclick="RemoveSelectedCharacterFromPreview" @onclick:stopPropagation="true">x</button>
+                                </div>
+                            }
+                        </div>
+                    }
+                    @if (EditorState.CurrentChoiceSet is not null)
+                    {
+                        <div class="choice-popup @BuildChoiceAlignmentClass(EditorState.CurrentChoiceSet.Alignment)">
+                            @foreach (var option in EditorState.CurrentChoiceSet.Options)
+                            {
+                                <button class="choice-option" @onclick="@(() => JumpToChoice(option.TargetAnchorId))">@option.Text</button>
+                            }
+                        </div>
+                    }
+                    <div class="dialogue-card dialogue-card-overlay">
+                        <span class="dialogue-speaker">@(!string.IsNullOrWhiteSpace(EditorState.SelectedRow?.Character) ? EditorState.SelectedRow?.Character : "Narration")</span>
+                        <p>@((MarkupString)(EditorState.SelectedRow?.Content ?? string.Empty))</p>
+                    </div>
+                </div>
+
+                <div class="scene-navigation">
+                    <button class="tool-button" @onclick="SelectPrevious">Previous</button>
+                    <div class="scene-navigation-status">
+                        @BuildDialogueNavigationLabel()
+                    </div>
+                    <button class="tool-button" @onclick="SelectNext">Next</button>
+                </div>
+            </div>
+
+            <div class="panel surface">
+                <div class="panel-header">
+                    <div>
+                        <p class="panel-label">Visual edits</p>
+                        <h2>Stage state at selected row</h2>
+                    </div>
+                </div>
+
+                <div class="editor-form">
+                    <label>
+                        <span>Upload background</span>
+                        <InputFile OnChange="UploadBackgroundAsync" accept=".png,.jpg,.jpeg,.webp" />
+                    </label>
+                    <label>
+                        <span>Background</span>
+                        <select @bind="SelectedBackgroundId" @bind:after="UpdateBackground">
+                            <option value="">No change at this row</option>
+                            @foreach (var asset in EditorState.BackgroundAssets)
+                            {
+                                <option value="@asset.Id">@asset.Name</option>
+                            }
+                        </select>
+                    </label>
+                    <div class="asset-summary">
+                        @foreach (var asset in EditorState.BackgroundAssets)
+                        {
+                            <button class="asset-chip @(asset.Id == SelectedBackgroundId ? "selected" : string.Empty)" @onclick="@(() => SelectBackgroundAsset(asset.Id))">@asset.Name</button>
+                        }
+                    </div>
+
+                    <div class="audio-editor">
+                        <label>
+                            <span>Music filename</span>
+                            <input @bind="MusicCueInput" placeholder="filename.ogg" />
+                        </label>
+                        <label>
+                            <span>One-shot SFX filenames</span>
+                            <input @bind="OneShotSfxInput" placeholder="filename.wav, other_filename.wav" />
+                        </label>
+                        <div class="character-editor-actions">
+                            <button class="tool-button" @onclick="ApplyAudio">Apply Audio</button>
+                        </div>
+                    </div>
+
+                    @if (EditorState.CurrentChoiceSet is not null)
+                    {
+                        <label>
+                            <span>Choice popup alignment</span>
+                            <select value="@EditorState.CurrentChoiceAlignment" @onchange="UpdateChoiceAlignment">
+                                <option value="@ChoicePopupAlignment.Left">Left</option>
+                                <option value="@ChoicePopupAlignment.Center">Center</option>
+                                <option value="@ChoicePopupAlignment.Right">Right</option>
+                            </select>
+                        </label>
+                    }
+
+                    <div class="character-editor">
+                        <label>
+                            <span>Upload character</span>
+                            <InputFile OnChange="UploadCharacterAsync" accept=".png,.jpg,.jpeg,.webp" />
+                        </label>
+                        <label>
+                            <span>Character asset</span>
+                            <select @bind="SelectedCharacterId">
+                                <option value="">No character asset selected</option>
+                                @foreach (var asset in EditorState.CharacterAssets)
+                                {
+                                    <option value="@asset.Id">@asset.Name</option>
+                                }
+                            </select>
+                        </label>
+                        <div class="asset-summary">
+                            @foreach (var asset in EditorState.CharacterAssets)
+                            {
+                                <button class="asset-chip @(asset.Id == SelectedCharacterId ? "selected" : string.Empty)" @onclick="@(() => SelectCharacterAsset(asset.Id))">@asset.Name</button>
+                            }
+                        </div>
+                        <div class="character-editor-actions">
+                            <button class="tool-button" @onclick="AddOrUpdateCharacter">Add Character</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="script-column">
+            <div class="panel surface">
+                <div class="panel-header">
+                    <div>
+                        <p class="panel-label">Script navigator</p>
+                        <h2>Dialogue lines</h2>
+                    </div>
+                    <div class="panel-action">Import a CSV, then stage dialogue rows only</div>
+                </div>
+
+                <div class="sheet-meta">
+                    <div>
+                        <span class="meta-label">CSV Source</span>
+                        <strong>@(string.IsNullOrWhiteSpace(EditorState.Project.ScriptSource.FileName) ? "No CSV imported" : EditorState.Project.ScriptSource.FileName)</strong>
+                    </div>
+                </div>
+
+                <div class="script-list">
+                    @if (EditorState.DialogueRows.Any())
+                    {
+                        @foreach (var row in EditorState.DialogueRows)
+                        {
+                            <button class="script-row @(row.RowNumber == EditorState.SelectedRowNumber ? "selected" : string.Empty)" @onclick="@(() => SelectRow(row.RowNumber))">
+                                <span class="row-number">@row.RowNumber</span>
+                                <span class="row-content">@BuildRowSummary(row)</span>
+                                @if (row.HasAnchor)
+                                {
+                                    <span class="row-anchor">@row.AnchorId</span>
+                                }
+                            </button>
+                        }
+                    }
+                    else
+                    {
+                        <div class="empty-state">
+                            Import a CSV to populate dialogue lines.
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+    </section>
+</div>
+
+@code {
+    private string StatusMessage { get; set; } = "Import a CSV or open a package";
+    private string? SelectedBackgroundId { get; set; }
+    private string SelectedCharacterId { get; set; } = string.Empty;
+    private double CharacterX { get; set; }
+    private double CharacterY { get; set; } = 0.08;
+    private double CharacterScale { get; set; } = 1;
+    private int CharacterTintR { get; set; } = 255;
+    private int CharacterTintG { get; set; } = 255;
+    private int CharacterTintB { get; set; } = 255;
+    private bool CharacterFlipX { get; set; }
+    private ElementReference SceneStageRef { get; set; }
+    private CancellationTokenSource? AutoSaveCts { get; set; }
+    private bool IsLoadingProject { get; set; } = true;
+    private bool IsBusy { get; set; } = true;
+    private string BusyTitle { get; set; } = "Loading local project";
+    private string BusyMessage { get; set; } = "Restoring saved script, staging, and assets from browser storage.";
+    private string ProjectNameInput { get; set; } = "Untitled Project";
+    private bool HasPendingDragSave { get; set; }
+    private bool IsStageDragInProgress { get; set; }
+    private DotNetObjectReference<Home>? DotNetRef { get; set; }
+    private string MusicCueInput { get; set; } = string.Empty;
+    private string OneShotSfxInput { get; set; } = string.Empty;
+    private string SelectedCharacterTintHex => BuildColorHex(CharacterTintR, CharacterTintG, CharacterTintB);
+
+    protected override async Task OnInitializedAsync()
+    {
+        DotNetRef = DotNetObjectReference.Create(this);
+        await EditorState.InitializeAsync();
+        SyncInputsFromSelection();
+        ProjectNameInput = EditorState.Project.Name;
+        IsLoadingProject = false;
+        IsBusy = false;
+        StatusMessage = EditorState.Project.LastModifiedUtc == default
+            ? "Import a CSV or open a package"
+            : $"Loaded local project from {EditorState.Project.LastModifiedUtc.LocalDateTime:t}";
+    }
+
+    private void CommitProjectName()
+    {
+        var currentName = EditorState.Project.Name;
+        EditorState.UpdateProjectName(ProjectNameInput);
+        ProjectNameInput = EditorState.Project.Name;
+        if (!string.Equals(currentName, EditorState.Project.Name, StringComparison.Ordinal))
+        {
+            RequestAutoSave($"Renamed project to {EditorState.Project.Name}");
+        }
+    }
+
+    private void HandleProjectNameKeyDown(KeyboardEventArgs args)
+    {
+        if (string.Equals(args.Key, "Enter", StringComparison.Ordinal))
+        {
+            CommitProjectName();
+        }
+    }
+
+    private void SelectRow(int rowNumber)
+    {
+        EditorState.SelectRow(rowNumber);
+        SyncInputsFromSelection();
+    }
+
+    private void SelectNext()
+    {
+        EditorState.SelectNextRow();
+        SyncInputsFromSelection();
+    }
+
+    private void SelectPrevious()
+    {
+        EditorState.SelectPreviousRow();
+        SyncInputsFromSelection();
+    }
+
+    private async Task ImportNewCsvAsync(InputFileChangeEventArgs args)
+    {
+        var file = args.File;
+        if (file is null)
+        {
+            return;
+        }
+
+        try
+        {
+            EditorState.CreateNewProject();
+            await using var stream = file.OpenReadStream(maxAllowedSize: 20 * 1024 * 1024);
+            await EditorState.ImportFromCsvAsync(stream, file.Name);
+            SyncInputsFromSelection();
+            ProjectNameInput = EditorState.Project.Name;
+            RequestAutoSave($"Created a new project from {file.Name} with {EditorState.Project.Script.Rows.Count} rows and {EditorState.DialogueRows.Count()} dialogue lines");
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = ex.Message;
+        }
+    }
+
+    private async Task ImportUpdatedCsvAsync(InputFileChangeEventArgs args)
+    {
+        var file = args.File;
+        if (file is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await using var stream = file.OpenReadStream(maxAllowedSize: 20 * 1024 * 1024);
+            var result = await EditorState.ImportUpdatedCsvAsync(stream, file.Name);
+            SyncInputsFromSelection();
+            ProjectNameInput = EditorState.Project.Name;
+            RequestAutoSave($"Updated script from {file.Name}. Preserved {result.PreservedEdits} scene edits and removed {result.RemovedEdits} unmatched edits.");
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = ex.Message;
+        }
+    }
+
+    private async Task ExportProjectPackageAsync()
+    {
+        try
+        {
+            ShowBusy("Saving package", "Building the project package and preparing the download.");
+            await InvokeAsync(StateHasChanged);
+            await Task.Yield();
+            await ProjectPackageService.ExportAsync(EditorState.Project);
+            StatusMessage = $"Exported package at {DateTime.Now:t}";
+        }
+        finally
+        {
+            HideBusy();
+        }
+    }
+
+    private void UpdateChoiceAlignment(ChangeEventArgs args)
+    {
+        if (args.Value is not string rawValue || !Enum.TryParse<ChoicePopupAlignment>(rawValue, out var alignment))
+        {
+            return;
+        }
+
+        EditorState.UpdateChoicePopupAlignment(alignment);
+        RequestAutoSave($"Choice popup moved to {alignment.ToString().ToLowerInvariant()}");
+    }
+
+    private void UpdateBackground()
+    {
+        EditorState.UpdateBackground(SelectedBackgroundId);
+        RequestAutoSave($"Background edit stored at row {EditorState.SelectedRowNumber}");
+    }
+
+    private void ApplyAudio()
+    {
+        EditorState.UpdateAudio(MusicCueInput, false, SplitAudioCueList(OneShotSfxInput));
+        SyncInputsFromSelection();
+        RequestAutoSave($"Audio edit stored at row {EditorState.SelectedRowNumber}");
+    }
+
+    private void RemoveMusic()
+    {
+        EditorState.UpdateAudio(null, true, SplitAudioCueList(OneShotSfxInput));
+        SyncInputsFromSelection();
+        RequestAutoSave($"Music stopped at row {EditorState.SelectedRowNumber}");
+    }
+
+    private void RemoveOneShotSfx(string cue)
+    {
+        var remaining = SplitAudioCueList(OneShotSfxInput)
+            .Where(item => !string.Equals(item, cue, StringComparison.OrdinalIgnoreCase));
+        EditorState.UpdateAudio(MusicCueInput, false, remaining);
+        SyncInputsFromSelection();
+        RequestAutoSave($"Removed SFX from row {EditorState.SelectedRowNumber}");
+    }
+
+    private async Task UploadBackgroundAsync(InputFileChangeEventArgs args)
+    {
+        var file = args.File;
+        if (file is null)
+        {
+            return;
+        }
+
+        await using var stream = file.OpenReadStream(maxAllowedSize: 10 * 1024 * 1024);
+        using var memoryStream = new MemoryStream();
+        await stream.CopyToAsync(memoryStream);
+
+        var asset = EditorState.AddBackgroundAsset(file.Name, file.Name, file.ContentType, memoryStream.ToArray());
+        SelectedBackgroundId = asset.Id;
+        EditorState.UpdateBackground(asset.Id);
+        RequestAutoSave($"Uploaded background {asset.Name}");
+    }
+
+    private async Task ImportProjectPackageAsync(InputFileChangeEventArgs args)
+    {
+        var file = args.File;
+        if (file is null)
+        {
+            return;
+        }
+
+        try
+        {
+            ShowBusy("Opening package", $"Loading {file.Name} and restoring its script, assets, and staging.");
+            await using var stream = file.OpenReadStream(maxAllowedSize: 100 * 1024 * 1024);
+            var project = await ProjectPackageService.ImportAsync(stream);
+            EditorState.ReplaceProject(project);
+            SyncInputsFromSelection();
+            ProjectNameInput = EditorState.Project.Name;
+            RequestAutoSave($"Loaded package {file.Name}");
+        }
+        finally
+        {
+            HideBusy();
+        }
+    }
+
+    private void SelectBackgroundAsset(string assetId)
+    {
+        SelectedBackgroundId = assetId;
+        UpdateBackground();
+    }
+
+    private async Task UploadCharacterAsync(InputFileChangeEventArgs args)
+    {
+        var file = args.File;
+        if (file is null)
+        {
+            return;
+        }
+
+        await using var stream = file.OpenReadStream(maxAllowedSize: 10 * 1024 * 1024);
+        using var memoryStream = new MemoryStream();
+        await stream.CopyToAsync(memoryStream);
+
+        var asset = EditorState.AddCharacterAsset(file.Name, file.Name, file.ContentType, memoryStream.ToArray());
+        SelectedCharacterId = asset.Id;
+        CharacterX = 0;
+        CharacterY = 0.08;
+        CharacterScale = 1;
+        CharacterTintR = 255;
+        CharacterTintG = 255;
+        CharacterTintB = 255;
+        CharacterFlipX = false;
+        RequestAutoSave($"Uploaded character {asset.Name}");
+    }
+
+    private void SelectCharacterAsset(string assetId)
+    {
+        SelectedCharacterId = assetId;
+        var activeCharacter = EditorState.CurrentScene.Characters.FirstOrDefault(item => item.CharacterId == assetId);
+        if (activeCharacter is not null)
+        {
+            CharacterX = activeCharacter.X;
+            CharacterY = activeCharacter.Y;
+            CharacterScale = activeCharacter.Scale;
+            CharacterTintR = activeCharacter.TintR;
+            CharacterTintG = activeCharacter.TintG;
+            CharacterTintB = activeCharacter.TintB;
+            CharacterFlipX = activeCharacter.FlipX;
+            return;
+        }
+
+        var asset = EditorState.CharacterAssets.FirstOrDefault(item => item.Id == assetId);
+        if (asset is null)
+        {
+            return;
+        }
+
+        CharacterX = 0;
+        CharacterY = 0.08;
+        CharacterScale = 1;
+        CharacterTintR = 255;
+        CharacterTintG = 255;
+        CharacterTintB = 255;
+        CharacterFlipX = false;
+    }
+
+    private void AddOrUpdateCharacter()
+    {
+        if (string.IsNullOrWhiteSpace(SelectedCharacterId))
+        {
+            StatusMessage = "Upload character assets before placing them.";
+            return;
+        }
+
+        var asset = EditorState.CharacterAssets.FirstOrDefault(item => item.Id == SelectedCharacterId);
+        if (asset is null)
+        {
+            StatusMessage = "Selected character asset is unavailable.";
+            return;
+        }
+
+        EditorState.UpsertCharacter(
+            asset.Id,
+            asset.Name,
+            CharacterX,
+            CharacterY,
+            CharacterScale,
+            ClampColor(CharacterTintR),
+            ClampColor(CharacterTintG),
+            ClampColor(CharacterTintB),
+            CharacterFlipX);
+        if (IsStageDragInProgress)
+        {
+            HasPendingDragSave = true;
+            return;
+        }
+
+        RequestAutoSave($"Character edit stored at row {EditorState.SelectedRowNumber}");
+    }
+
+    private void RemoveCharacter()
+    {
+        if (string.IsNullOrWhiteSpace(SelectedCharacterId))
+        {
+            return;
+        }
+
+        EditorState.RemoveCharacter(SelectedCharacterId);
+        RequestAutoSave($"Character removed at row {EditorState.SelectedRowNumber}");
+    }
+
+    private void RemoveSelectedCharacterFromPreview()
+    {
+        RemoveCharacter();
+        SyncInputsFromSelection();
+    }
+
+    private void ToggleSelectedCharacterFlip()
+    {
+        if (string.IsNullOrWhiteSpace(SelectedCharacterId))
+        {
+            return;
+        }
+
+        CharacterFlipX = !CharacterFlipX;
+        AddOrUpdateCharacter();
+    }
+
+    private void UpdateSelectedCharacterTint(ChangeEventArgs args)
+    {
+        if (args.Value is not string hex)
+        {
+            return;
+        }
+
+        if (!TryParseColorHex(hex, out var red, out var green, out var blue))
+        {
+            return;
+        }
+
+        CharacterTintR = red;
+        CharacterTintG = green;
+        CharacterTintB = blue;
+        AddOrUpdateCharacter();
+    }
+
+    private void JumpToChoice(string targetAnchorId)
+    {
+        if (EditorState.JumpToAnchor(targetAnchorId))
+        {
+            SyncInputsFromSelection();
+            StatusMessage = $"Jumped to {targetAnchorId}";
+            return;
+        }
+
+        StatusMessage = $"Could not find target {targetAnchorId}";
+    }
+
+    private void SyncInputsFromSelection()
+    {
+        var scene = EditorState.CurrentScene;
+        SelectedBackgroundId = scene.BackgroundAssetId;
+
+        var selectedCharacter = scene.Characters.FirstOrDefault();
+        if (selectedCharacter is null)
+        {
+            SelectedCharacterId = string.Empty;
+            CharacterX = 0;
+            CharacterY = 0.08;
+            CharacterScale = 1;
+            CharacterTintR = 255;
+            CharacterTintG = 255;
+            CharacterTintB = 255;
+            CharacterFlipX = false;
+        }
+        else
+        {
+            SelectedCharacterId = selectedCharacter.CharacterId;
+            CharacterX = selectedCharacter.X;
+            CharacterY = selectedCharacter.Y;
+            CharacterScale = selectedCharacter.Scale;
+            CharacterTintR = selectedCharacter.TintR;
+            CharacterTintG = selectedCharacter.TintG;
+            CharacterTintB = selectedCharacter.TintB;
+            CharacterFlipX = selectedCharacter.FlipX;
+        }
+
+        var currentEdit = EditorState.FindSceneEdit(EditorState.SelectedRowNumber);
+        MusicCueInput = currentEdit?.StopMusic == true ? string.Empty : currentEdit?.MusicCueName ?? string.Empty;
+        OneShotSfxInput = currentEdit is null || currentEdit.OneShotSfxCueNames.Count == 0
+            ? string.Empty
+            : string.Join(", ", currentEdit.OneShotSfxCueNames);
+    }
+
+    private bool IsActiveCharacter(string characterId)
+    {
+        return !string.IsNullOrWhiteSpace(SelectedCharacterId) && string.Equals(SelectedCharacterId, characterId, StringComparison.Ordinal);
+    }
+
+    private string ResolveBackgroundName()
+    {
+        if (string.IsNullOrWhiteSpace(EditorState.CurrentScene.BackgroundAssetId))
+        {
+            return EditorState.SelectedRow is null ? "Import a sheet to begin" : "No background assigned";
+        }
+
+        return EditorState.FindAsset(EditorState.CurrentScene.BackgroundAssetId)?.Name
+            ?? EditorState.CurrentScene.BackgroundAssetId;
+    }
+
+    private string? ResolveBackgroundImageUrl()
+    {
+        if (string.IsNullOrWhiteSpace(EditorState.CurrentScene.BackgroundAssetId))
+        {
+            return null;
+        }
+
+        var asset = EditorState.FindAsset(EditorState.CurrentScene.BackgroundAssetId);
+        return asset?.EmbeddedDataUrl ?? asset?.PublicUrl;
+    }
+
+    private string BuildBackgroundStyle()
+    {
+        var imageUrl = ResolveBackgroundImageUrl();
+        return string.IsNullOrWhiteSpace(imageUrl)
+            ? string.Empty
+            : $"background-image: linear-gradient(rgba(42, 28, 20, 0.08), rgba(42, 28, 20, 0.08)), url('{imageUrl}');";
+    }
+
+    private static string BuildCharacterStyle(CharacterPlacement character)
+    {
+        var left = 50 + (character.X * 40);
+        var bottom = 10 + (character.Y * 40);
+        var scale = Math.Max(0.1, character.Scale);
+        var flip = character.FlipX ? -1 : 1;
+        var handleScale = 1d / scale;
+        var leftText = left.ToString("F4", System.Globalization.CultureInfo.InvariantCulture);
+        var bottomText = bottom.ToString("F4", System.Globalization.CultureInfo.InvariantCulture);
+        return $"left: {leftText}%; bottom: {bottomText}%; z-index: {Math.Max(1, character.Layer)}; --character-scale: {scale.ToString(System.Globalization.CultureInfo.InvariantCulture)}; --character-flip: {flip}; --handle-scale: {handleScale.ToString(System.Globalization.CultureInfo.InvariantCulture)};";
+    }
+
+    private string? ResolveCharacterImageUrl(string characterId)
+    {
+        var asset = EditorState.FindAsset(characterId);
+        return asset?.EmbeddedDataUrl ?? asset?.PublicUrl;
+    }
+
+    private static string BuildCharacterImageStyle(CharacterPlacement character)
+    {
+        return $"filter: url(#{BuildTintFilterId(character)});";
+    }
+
+    private static IEnumerable<string> SplitAudioCueList(string? rawValue)
+    {
+        return string.IsNullOrWhiteSpace(rawValue)
+            ? []
+            : rawValue.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    }
+
+    private static string BuildColorHex(int red, int green, int blue)
+    {
+        return $"#{ClampColor(red):X2}{ClampColor(green):X2}{ClampColor(blue):X2}";
+    }
+
+    private static bool TryParseColorHex(string value, out int red, out int green, out int blue)
+    {
+        red = 255;
+        green = 255;
+        blue = 255;
+
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var hex = value.Trim();
+        if (hex.StartsWith('#'))
+        {
+            hex = hex[1..];
+        }
+
+        if (hex.Length != 6)
+        {
+            return false;
+        }
+
+        if (!int.TryParse(hex[..2], System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out red))
+        {
+            return false;
+        }
+
+        if (!int.TryParse(hex.Substring(2, 2), System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out green))
+        {
+            return false;
+        }
+
+        return int.TryParse(hex.Substring(4, 2), System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out blue);
+    }
+
+    private static string BuildTintFilterId(CharacterPlacement character)
+    {
+        return $"tint-{character.CharacterId}-{character.Layer}";
+    }
+
+    private static string BuildTintSlope(int channel)
+    {
+        return (Math.Clamp(channel, 0, 255) / 255d).ToString(System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static string BuildChoiceAlignmentClass(ChoicePopupAlignment alignment)
+    {
+        return alignment switch
+        {
+            ChoicePopupAlignment.Left => "choice-popup-left",
+            ChoicePopupAlignment.Right => "choice-popup-right",
+            _ => "choice-popup-center"
+        };
+    }
+
+    private string BuildSelectedRowTitle()
+    {
+        if (EditorState.SelectedRow is null)
+        {
+            return "No row selected";
+        }
+
+        return string.IsNullOrWhiteSpace(EditorState.SelectedRow.AnchorId)
+            ? $"Row {EditorState.SelectedRowNumber}"
+            : $"Row {EditorState.SelectedRowNumber} · {EditorState.SelectedRow.AnchorId}";
+    }
+
+    private string BuildDialogueNavigationLabel()
+    {
+        if (EditorState.SelectedRow is null)
+        {
+            return "No dialogue row selected";
+        }
+
+        var dialogueIndex = EditorState.DialogueRows
+            .Select((row, index) => new { row.RowNumber, DisplayIndex = index + 1 })
+            .FirstOrDefault(item => item.RowNumber == EditorState.SelectedRowNumber)
+            ?.DisplayIndex;
+
+        return dialogueIndex is null
+            ? $"CSV row {EditorState.SelectedRowNumber}"
+            : $"Dialogue row {dialogueIndex} of {EditorState.DialogueRows.Count()}";
+    }
+
+    private static string BuildRowSummary(ScriptRow row)
+    {
+        if (!string.IsNullOrWhiteSpace(row.ActionEffect))
+        {
+            return $"{row.Content} -> {row.ActionEffect}";
+        }
+
+        return row.Content;
+    }
+
+    private static int ClampColor(int value)
+    {
+        return Math.Clamp(value, 0, 255);
+    }
+
+    private async Task BeginStageDragAsync(string characterId, StageDragMode mode, PointerEventArgs args)
+    {
+        SelectCharacterAsset(characterId);
+        var activeCharacter = EditorState.CurrentScene.Characters.FirstOrDefault(item => item.CharacterId == characterId);
+        if (activeCharacter is null || DotNetRef is null)
+        {
+            return;
+        }
+
+        IsStageDragInProgress = true;
+        HasPendingDragSave = false;
+
+        await JSRuntime.InvokeVoidAsync(
+            "webVN.startCharacterDrag",
+            SceneStageRef,
+            BuildCharacterElementId(characterId),
+            characterId,
+            mode.ToString().ToLowerInvariant(),
+            args.ClientX,
+            args.ClientY,
+            activeCharacter.X,
+            activeCharacter.Y,
+            activeCharacter.Scale,
+            activeCharacter.FlipX,
+            DotNetRef);
+    }
+
+    [JSInvokable]
+    public Task CompleteStageDrag(string characterId, double x, double y, double scale)
+    {
+        IsStageDragInProgress = false;
+
+        if (!string.Equals(SelectedCharacterId, characterId, StringComparison.Ordinal))
+        {
+            SelectCharacterAsset(characterId);
+        }
+
+        CharacterX = x;
+        CharacterY = y;
+        CharacterScale = scale;
+        AddOrUpdateCharacter();
+
+        if (!HasPendingDragSave)
+        {
+            return InvokeAsync(StateHasChanged);
+        }
+
+        HasPendingDragSave = false;
+        RequestAutoSave($"Character edit stored at row {EditorState.SelectedRowNumber}");
+        return InvokeAsync(StateHasChanged);
+    }
+
+    private void RequestAutoSave(string message)
+    {
+        StatusMessage = message;
+
+        AutoSaveCts?.Cancel();
+        AutoSaveCts?.Dispose();
+        AutoSaveCts = new CancellationTokenSource();
+        _ = SaveSoonAsync(AutoSaveCts.Token, message);
+    }
+
+    private void ShowBusy(string title, string message)
+    {
+        BusyTitle = title;
+        BusyMessage = message;
+        IsBusy = true;
+        StateHasChanged();
+    }
+
+    private void HideBusy()
+    {
+        IsBusy = false;
+        StateHasChanged();
+    }
+
+    private async Task SaveSoonAsync(CancellationToken cancellationToken, string message)
+    {
+        try
+        {
+            await Task.Delay(600, cancellationToken);
+            await EditorState.SaveAsync();
+            StatusMessage = $"{message} • autosaved at {DateTime.Now:t}";
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Autosave failed: {ex.Message}";
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    public void Dispose()
+    {
+        AutoSaveCts?.Cancel();
+        AutoSaveCts?.Dispose();
+        DotNetRef?.Dispose();
+    }
+
+    private enum StageDragMode
+    {
+        Translate,
+        Scale
+    }
+
+    private static string BuildCharacterElementId(string characterId)
+    {
+        return $"scene-character-{characterId}";
+    }
+}
