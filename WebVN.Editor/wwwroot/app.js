@@ -92,6 +92,17 @@ const webVNDrag = (() => {
     return Math.min(max, Math.max(min, value));
   }
 
+  function getHandleTransformFactors(characterElement) {
+    const styles = window.getComputedStyle(characterElement);
+    const scaleValue = Number.parseFloat(styles.getPropertyValue("--character-scale"));
+    const flipValue = Number.parseFloat(styles.getPropertyValue("--character-flip"));
+
+    return {
+      scale: Number.isFinite(scaleValue) && scaleValue !== 0 ? Math.abs(scaleValue) : 1,
+      flip: Number.isFinite(flipValue) && flipValue < 0 ? -1 : 1
+    };
+  }
+
   function applyCharacterPreview(state) {
     const left = 50 + (state.currentX * 40);
     const bottom = 10 + (state.currentY * 40);
@@ -129,8 +140,12 @@ const webVNDrag = (() => {
       offsetY = (stageRect.bottom - margin) - handleRect.bottom;
     }
 
-    state.characterElement.style.setProperty("--handle-offset-x", `${offsetX}px`);
-    state.characterElement.style.setProperty("--handle-offset-y", `${offsetY}px`);
+    const transform = getHandleTransformFactors(state.characterElement);
+    const localOffsetX = offsetX === 0 ? 0 : offsetX / (transform.scale * transform.flip);
+    const localOffsetY = offsetY === 0 ? 0 : offsetY / transform.scale;
+
+    state.characterElement.style.setProperty("--handle-offset-x", `${localOffsetX}px`);
+    state.characterElement.style.setProperty("--handle-offset-y", `${localOffsetY}px`);
   }
 
   function clampCharacterHandles(stageElement, characterElementId) {
@@ -261,8 +276,138 @@ const webVNDrag = (() => {
   };
 })();
 
+const webVNPicking = (() => {
+  const imageDataCache = new Map();
+
+  async function getImageDataForElement(imageElement) {
+    const source = imageElement.currentSrc || imageElement.src;
+    if (!source) {
+      return null;
+    }
+
+    if (imageDataCache.has(source)) {
+      return imageDataCache.get(source);
+    }
+
+    const image = await new Promise((resolve, reject) => {
+      if (imageElement.complete && imageElement.naturalWidth > 0) {
+        resolve(imageElement);
+        return;
+      }
+
+      const handleLoad = () => {
+        cleanup();
+        resolve(imageElement);
+      };
+
+      const handleError = error => {
+        cleanup();
+        reject(error);
+      };
+
+      const cleanup = () => {
+        imageElement.removeEventListener("load", handleLoad);
+        imageElement.removeEventListener("error", handleError);
+      };
+
+      imageElement.addEventListener("load", handleLoad, { once: true });
+      imageElement.addEventListener("error", handleError, { once: true });
+    });
+
+    const width = image.naturalWidth || image.width;
+    const height = image.naturalHeight || image.height;
+    if (!width || !height) {
+      return null;
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) {
+      return null;
+    }
+
+    context.clearRect(0, 0, width, height);
+    context.drawImage(image, 0, 0, width, height);
+    const imageData = context.getImageData(0, 0, width, height);
+    const payload = { width, height, data: imageData.data };
+    imageDataCache.set(source, payload);
+    return payload;
+  }
+
+  async function pickCharacterAtPoint(stageElement, clientX, clientY) {
+    if (!stageElement) {
+      return null;
+    }
+
+    const stageRect = stageElement.getBoundingClientRect();
+    if (clientX < stageRect.left || clientX > stageRect.right || clientY < stageRect.top || clientY > stageRect.bottom) {
+      return null;
+    }
+
+    const candidates = Array
+      .from(stageElement.querySelectorAll(".scene-character"))
+      .sort((left, right) => {
+        const leftZ = Number.parseInt(window.getComputedStyle(left).zIndex || "0", 10);
+        const rightZ = Number.parseInt(window.getComputedStyle(right).zIndex || "0", 10);
+        return rightZ - leftZ;
+      });
+
+    for (const characterElement of candidates) {
+      const characterId = characterElement.getAttribute("data-character-id");
+      if (!characterId) {
+        continue;
+      }
+
+      const imageElement = characterElement.querySelector(".scene-character-image");
+      if (!imageElement) {
+        const rect = characterElement.getBoundingClientRect();
+        if (clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom) {
+          return characterId;
+        }
+
+        continue;
+      }
+
+      const rect = imageElement.getBoundingClientRect();
+      if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) {
+        continue;
+      }
+
+      const payload = await getImageDataForElement(imageElement);
+      if (!payload) {
+        return characterId;
+      }
+
+      const xRatio = rect.width <= 0 ? 0 : (clientX - rect.left) / rect.width;
+      const yRatio = rect.height <= 0 ? 0 : (clientY - rect.top) / rect.height;
+
+      const styles = window.getComputedStyle(characterElement);
+      const flipValue = Number.parseFloat(styles.getPropertyValue("--character-flip"));
+      const flipped = Number.isFinite(flipValue) && flipValue < 0;
+
+      const normalizedX = flipped ? 1 - xRatio : xRatio;
+      const pixelX = Math.max(0, Math.min(payload.width - 1, Math.floor(normalizedX * payload.width)));
+      const pixelY = Math.max(0, Math.min(payload.height - 1, Math.floor(yRatio * payload.height)));
+      const alpha = payload.data[((pixelY * payload.width) + pixelX) * 4 + 3];
+
+      if (alpha > 8) {
+        return characterId;
+      }
+    }
+
+    return null;
+  }
+
+  return {
+    pickCharacterAtPoint
+  };
+})();
+
 window.webVN = {
   storage: webVNStorage,
+  pickCharacterAtPoint: webVNPicking.pickCharacterAtPoint,
   downloadJson: function (fileName, json) {
     const blob = new Blob([json], { type: "application/json" });
     const url = URL.createObjectURL(blob);

@@ -66,7 +66,7 @@
                 </div>
 
                 @{ var currentScene = EditorState.CurrentScene; }
-                <div class="scene-stage" @ref="SceneStageRef" style="@BuildBackgroundStyle()">
+                <div class="scene-stage" @ref="SceneStageRef" style="@BuildBackgroundStyle()" @onpointerdown="HandleStagePointerDownAsync">
                     <svg class="scene-filters" aria-hidden="true" focusable="false">
                         <defs>
                             @foreach (var character in currentScene.Characters.OrderBy(item => item.Layer))
@@ -88,7 +88,7 @@
                     }
                     @if (!string.IsNullOrWhiteSpace(currentScene.MusicCueName) || currentScene.OneShotSfxCueNames.Any())
                     {
-                        <div class="scene-audio-readout">
+                        <div class="scene-audio-readout" @onpointerdown:stopPropagation="true">
                             @if (!string.IsNullOrWhiteSpace(currentScene.MusicCueName))
                             {
                                 <div class="audio-chip">
@@ -109,7 +109,7 @@
                     }
                     @foreach (var character in currentScene.Characters.OrderBy(item => item.Layer))
                     {
-                        <div id="@BuildCharacterElementId(character.CharacterId)" data-character-id="@character.CharacterId" class="scene-character @(IsActiveCharacter(character.CharacterId) ? "scene-character-active" : string.Empty)" style="@BuildCharacterStyle(character)" @onclick="@(() => SelectCharacterAsset(character.CharacterId))">
+                        <div id="@BuildCharacterElementId(character.CharacterId)" data-character-id="@character.CharacterId" class="scene-character @(IsActiveCharacter(character.CharacterId) ? "scene-character-active" : string.Empty)" style="@BuildCharacterStyle(character)">
                             <div class="scene-character-figure">
                                 @if (!string.IsNullOrWhiteSpace(ResolveCharacterImageUrl(character.CharacterId)))
                                 {
@@ -144,7 +144,7 @@
                     }
                     @if (EditorState.CurrentChoiceSet is not null)
                     {
-                        <div class="choice-popup @BuildChoiceAlignmentClass(EditorState.CurrentChoiceSet.Alignment)">
+                        <div class="choice-popup @BuildChoiceAlignmentClass(EditorState.CurrentChoiceSet.Alignment)" @onpointerdown:stopPropagation="true">
                             @foreach (var option in EditorState.CurrentChoiceSet.Options)
                             {
                                 <button class="choice-option" @onclick="@(() => JumpToChoice(option.TargetAnchorId))">@option.Text</button>
@@ -606,6 +606,35 @@
         CharacterTintG = 255;
         CharacterTintB = 255;
         CharacterFlipX = false;
+    }
+
+    private void ClearSelectedCharacter()
+    {
+        if (string.IsNullOrWhiteSpace(SelectedCharacterId))
+        {
+            return;
+        }
+
+        SelectedCharacterId = string.Empty;
+        PendingHandleClampCharacterId = null;
+        LastClampedHandleCharacterId = null;
+    }
+
+    private async Task HandleStagePointerDownAsync(PointerEventArgs args)
+    {
+        var characterId = await JSRuntime.InvokeAsync<string?>(
+            "webVN.pickCharacterAtPoint",
+            SceneStageRef,
+            args.ClientX,
+            args.ClientY);
+
+        if (!string.IsNullOrWhiteSpace(characterId))
+        {
+            SelectCharacterAsset(characterId);
+            return;
+        }
+
+        ClearSelectedCharacter();
     }
 
     private void AddOrUpdateCharacter()
