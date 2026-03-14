@@ -4,6 +4,14 @@ namespace WebVN.Editor.Services;
 
 public sealed class EditorState
 {
+    public enum JumpTargetResolution
+    {
+        Invalid,
+        LineId,
+        StoryId,
+        MissingStoryId
+    }
+
     private readonly IBrowserProjectStorage _projectStorage;
     private readonly ICsvScriptImportService _csvScriptImportService;
     private readonly HashSet<string> _dirtyAssetIds = [];
@@ -239,21 +247,32 @@ public sealed class EditorState
         Touch();
     }
 
-    public bool JumpToAnchor(string? anchorId)
+    public JumpTargetResolution JumpToTarget(string? targetId)
     {
-        if (string.IsNullOrWhiteSpace(anchorId))
+        if (string.IsNullOrWhiteSpace(targetId))
         {
-            return false;
+            return JumpTargetResolution.Invalid;
         }
 
-        var targetRow = Project.Script.Rows.FirstOrDefault(row => string.Equals(row.AnchorId, anchorId, StringComparison.OrdinalIgnoreCase));
-        if (targetRow is null)
+        var targetRow = Project.Script.Rows.FirstOrDefault(row => string.Equals(row.AnchorId, targetId, StringComparison.OrdinalIgnoreCase));
+        if (targetRow is not null)
         {
-            return false;
+            SelectedRowNumber = targetRow.RowNumber;
+            return JumpTargetResolution.LineId;
         }
 
-        SelectedRowNumber = targetRow.RowNumber;
-        return true;
+        var storyIdRow = Project.Script.Rows.FirstOrDefault(row =>
+            row.ActionType == ScriptActionType.EventId &&
+            string.Equals(row.Content, targetId, StringComparison.OrdinalIgnoreCase));
+
+        if (storyIdRow is null)
+        {
+            return JumpTargetResolution.MissingStoryId;
+        }
+
+        var firstDialogueRow = DialogueRows.FirstOrDefault(row => row.RowNumber > storyIdRow.RowNumber);
+        SelectedRowNumber = firstDialogueRow?.RowNumber ?? storyIdRow.RowNumber;
+        return JumpTargetResolution.StoryId;
     }
 
     public async Task SaveAsync()

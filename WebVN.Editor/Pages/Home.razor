@@ -652,14 +652,19 @@
 
     private void JumpToChoice(string targetAnchorId)
     {
-        if (EditorState.JumpToAnchor(targetAnchorId))
+        var resolution = EditorState.JumpToTarget(targetAnchorId);
+        if (resolution is Services.EditorState.JumpTargetResolution.LineId or Services.EditorState.JumpTargetResolution.StoryId)
         {
             SyncInputsFromSelection();
-            StatusMessage = $"Jumped to {targetAnchorId}";
+            StatusMessage = resolution == Services.EditorState.JumpTargetResolution.LineId
+                ? $"Jumped to line id {targetAnchorId}"
+                : $"Jumped to story id {targetAnchorId}";
             return;
         }
 
-        StatusMessage = $"Could not find target {targetAnchorId}";
+        StatusMessage = resolution == Services.EditorState.JumpTargetResolution.MissingStoryId
+            ? $"This would normally jump to story id {targetAnchorId}, but that story id does not exist in the current CSV."
+            : $"Could not find target {targetAnchorId}";
     }
 
     private void SyncInputsFromSelection()

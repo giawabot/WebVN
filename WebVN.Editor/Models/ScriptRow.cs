@@ -20,5 +20,10 @@ public sealed class ScriptRow
 
     public bool HasAnchor => !string.IsNullOrWhiteSpace(AnchorId);
 
-    public string ActionLabel => ActionType.ToString();
+    public string ActionLabel => ActionType switch
+    {
+        ScriptActionType.EventId => "StoryId",
+        ScriptActionType.SkillCheck => "JumpWhen",
+        _ => ActionType.ToString()
+    };
 }

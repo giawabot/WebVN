@@ -157,16 +157,31 @@ public sealed class CsvScriptImportService : ICsvScriptImportService
 
     private static ScriptActionType ParseActionType(string? actionType)
     {
-        return actionType?.Trim() switch
+        var normalized = NormalizeActionType(actionType);
+
+        return normalized switch
         {
-            "EventID" => ScriptActionType.EventId,
-            "Dialogue" => ScriptActionType.Dialogue,
-            "DialogueOption" => ScriptActionType.DialogueOption,
-            "Skillcheck" => ScriptActionType.SkillCheck,
-            "Jump" => ScriptActionType.Jump,
-            "SetVariable" => ScriptActionType.SetVariable,
-            "End" => ScriptActionType.End,
+            "eventid" => ScriptActionType.EventId,
+            "storyid" => ScriptActionType.EventId,
+            "dialogue" => ScriptActionType.Dialogue,
+            "dialogueoption" => ScriptActionType.DialogueOption,
+            "skillcheck" => ScriptActionType.SkillCheck,
+            "jumpwhen" => ScriptActionType.SkillCheck,
+            "jump" => ScriptActionType.Jump,
+            "setvariable" => ScriptActionType.SetVariable,
+            "end" => ScriptActionType.End,
             _ => ScriptActionType.Unknown
         };
+    }
+
+    private static string? NormalizeActionType(string? actionType)
+    {
+        return string.IsNullOrWhiteSpace(actionType)
+            ? null
+            : new string(actionType
+                .Trim()
+                .Where(ch => ch != ' ' && ch != '_' && ch != '-')
+                .ToArray())
+                .ToLowerInvariant();
     }
 }

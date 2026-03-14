@@ -31,6 +31,15 @@ The editor is script-first: writers own the story flow in CSV, while the editor 
   - `Action Effect`
   - `Notes`
 
+- Supported action types currently include:
+  - `StoryId`
+  - `Dialogue`
+  - `DialogueOption`
+  - `JumpWhen`
+  - `Jump`
+  - `SetVariable`
+  - `End`
+
 The editor does not currently interpret `Condition` itself, but it preserves it in exported project JSON for downstream runtime use.
 
 ## Local Development
